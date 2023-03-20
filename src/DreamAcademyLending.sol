@@ -35,6 +35,17 @@ contract DreamAcademyLending {
     address _usdc;
     address _eth;
 
+    struct CustomerInfo{
+        uint deposit_usdc;
+        uint deposit_eth;
+        uint borrow_usdc;
+        uint borrow_eth;
+        uint collateral_eth;
+        uint collateral_usdc;
+        uint last_updated;
+    }
+    mapping(address => CustomerInfo) customer;
+
     mapping(address => uint) deposit_usdc;
     mapping(address => uint) deposit_eth;
     mapping(address => uint) borrow_usdc;
@@ -44,6 +55,12 @@ contract DreamAcademyLending {
     uint pool_deposit_usdc;
 
     modifier setInterest {
+        if(customer[msg.sender].borrow_usdc > 0){
+            for(uint i = customer[msg.sender].last_updated; i < block.number; i++){
+                customer[msg.sender].borrow_usdc = customer[msg.sender].borrow_usdc + customer[msg.sender].borrow_usdc / 10;
+            }
+        }
+        customer[msg.sender].last_updated = block.number;
         _;
     }
 
@@ -54,20 +71,20 @@ contract DreamAcademyLending {
 
     function initializeLendingProtocol(address usdc) public payable {
         ERC20(usdc).transferFrom(msg.sender, address(this), msg.value);
-        deposit_eth[msg.sender] += msg.value;
-        deposit_usdc[msg.sender] += msg.value;
+        customer[msg.sender].deposit_eth += msg.value;
+        customer[msg.sender].deposit_usdc += msg.value;
     }
 
     function deposit(address tokenAddress, uint256 amount) external payable{
         if (tokenAddress == _eth){
             //require(msg.value > 0, "must deposit more than 0 ether");
             require(msg.value == amount, "insufficient eth");
-            deposit_eth[msg.sender] += msg.value;
+            customer[msg.sender].deposit_eth += msg.value;
         }else{
             require(ERC20(tokenAddress).allowance(msg.sender, address(this)) >= amount, "insufficient usdc");
-            deposit_usdc[msg.sender] += amount;
+            customer[msg.sender].deposit_usdc += amount;
             ERC20(tokenAddress).transferFrom(msg.sender, address(this), amount);
-            pool_deposit_usdc = ERC20(tokenAddress).balanceOf(address(this));
+            //pool_deposit_usdc = ERC20(tokenAddress).balanceOf(address(this));
         }
     }
 
@@ -77,39 +94,42 @@ contract DreamAcademyLending {
         uint current_eth = oracle.getPrice(_eth);
         uint avaliable_amount;
         if(tokenAddress == _usdc){
-            avaliable_amount =  (deposit_eth[msg.sender] * current_eth / current_usdc) /  2;
+            avaliable_amount =  (customer[msg.sender].deposit_eth * current_eth / current_usdc) /  2;
+            console.log("available: %d, amount: %d",avaliable_amount, amount);
             require(avaliable_amount >= amount, "need more deposit");
             require(amount <= ERC20(_usdc).balanceOf(address(this)), "we don't have that much zz");
             
             uint collateral = amount * current_usdc / current_eth * 2;
-            borrow_usdc[msg.sender] += amount;
-            collateral_eth[msg.sender] += collateral;
-            deposit_eth[msg.sender] -= collateral;
+            customer[msg.sender].borrow_usdc += amount;
+            customer[msg.sender].collateral_eth += collateral;
+            customer[msg.sender].deposit_eth -= collateral;
 
             ERC20(tokenAddress).transfer(msg.sender, amount);
         }else{
-            avaliable_amount =  (deposit_usdc[msg.sender] * current_usdc / current_eth) /  2;
+            avaliable_amount =  (customer[msg.sender].deposit_usdc * current_usdc / current_eth) /  2;
             require(avaliable_amount >= amount, "need more deposit");
             require(avaliable_amount <= address(this).balance, "we don't have that much zz");
             
             uint collateral = amount * current_eth / current_usdc * 2;
-            borrow_eth[msg.sender] += amount;
-            collateral_usdc[msg.sender] += collateral;
-            deposit_usdc[msg.sender] -= collateral;
+            customer[msg.sender].borrow_eth += amount;
+            customer[msg.sender].collateral_usdc += collateral;
+            customer[msg.sender].deposit_usdc -= collateral;
 
             (bool success, ) = msg.sender.call{value: amount}("");
             require(success);
         }
+        customer[msg.sender].last_updated = block.number;
     }
     // tokenAddress를 amount만큼 갚겠다.
-    function repay(address tokenAddress, uint256 amount) external payable {
-        require(borrow_eth[msg.sender] != 0 || borrow_usdc[msg.sender] != 0, "Nothing to repay");
+    function repay(address tokenAddress, uint256 amount) external payable setInterest{
+        require(customer[msg.sender].borrow_eth != 0 || customer[msg.sender].borrow_usdc != 0, "Nothing to repay");
         if(tokenAddress == _usdc){
             require(ERC20(tokenAddress).allowance(msg.sender, address(this)) >= amount, "not approved");
-            uint repaied = collateral_eth[msg.sender] * amount / borrow_usdc[msg.sender];
-            borrow_usdc[msg.sender] -= amount;
-            collateral_eth[msg.sender] -= repaied;
-            deposit_eth[msg.sender] += repaied;
+            uint repaied = customer[msg.sender].collateral_eth * amount / customer[msg.sender].borrow_usdc;
+            console.log("repaied: %d", repaied);
+            customer[msg.sender].borrow_usdc -= amount;
+            customer[msg.sender].collateral_eth -= repaied;
+            customer[msg.sender].deposit_eth += repaied;
             ERC20(tokenAddress).transferFrom(msg.sender, address(this), amount);
         }
     }

@@ -277,7 +277,7 @@ contract Testx is Test {
             );
 
             assertTrue(success);
-            console.log("%d %d",usdc.balanceOf(user2), 2000 ether);
+
             assertTrue(usdc.balanceOf(user2) == 2000 ether);
 
             usdc.approve(address(lending), type(uint256).max);
