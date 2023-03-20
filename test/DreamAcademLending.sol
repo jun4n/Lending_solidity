@@ -2,8 +2,8 @@
 pragma solidity 0.8.13;
 
 import "forge-std/Test.sol";
-
-import {ERC20} from "openzeppelin-contracts/token/ERC20/ERC20.sol";
+import "forge-std/console.sol";
+import {ERC20} from "openzeppelin-contracts/contracts/token/ERC20/ERC20.sol";
 import "src/DreamAcademyLending.sol";
 
 contract CUSDC is ERC20 {
@@ -57,6 +57,7 @@ contract Testx is Test {
 
         lending.initializeLendingProtocol{value: 1}(address(usdc)); // set reserve ^__^
 
+        // 0x0이 ETH?
         dreamOracle.setPrice(address(0x0), 1339 ether);
         dreamOracle.setPrice(address(usdc), 1 ether);
     }
@@ -95,6 +96,7 @@ contract Testx is Test {
         (bool success,) = address(lending).call(
             abi.encodeWithSelector(DreamAcademyLending.deposit.selector, address(usdc), 2000 ether)
         );
+        console.logBool(success);
         assertTrue(success);
         assertTrue(usdc.balanceOf(address(lending)) == 2000 ether + 1);
     }
@@ -131,6 +133,7 @@ contract Testx is Test {
             (bool success,) = address(lending).call(
                 abi.encodeWithSelector(DreamAcademyLending.borrow.selector, address(usdc), 1000 ether)
             );
+            console.logBool(success);
             assertFalse(success);
             assertTrue(usdc.balanceOf(user2) == 0 ether);
         }
@@ -146,6 +149,7 @@ contract Testx is Test {
             (bool success,) = address(lending).call(
                 abi.encodeWithSelector(DreamAcademyLending.borrow.selector, address(usdc), 1000 ether)
             );
+            console.logBool(success);
             assertFalse(success);
             assertTrue(usdc.balanceOf(user2) == 0 ether);
         }
