@@ -34,6 +34,7 @@ contract DreamAcademyLending {
     IPriceOracle oracle;
     address _usdc;
     address _eth;
+
     mapping(address => uint) deposit_usdc;
     mapping(address => uint) deposit_eth;
     mapping(address => uint) borrow_usdc;
@@ -41,6 +42,10 @@ contract DreamAcademyLending {
     mapping(address => uint) collateral_usdc;
     mapping(address => uint) collateral_eth;
     uint pool_deposit_usdc;
+
+    modifier setInterest {
+        _;
+    }
 
     constructor (IPriceOracle _oracle, address usdc){
         oracle = _oracle;
@@ -74,7 +79,7 @@ contract DreamAcademyLending {
         if(tokenAddress == _usdc){
             avaliable_amount =  (deposit_eth[msg.sender] * current_eth / current_usdc) /  2;
             require(avaliable_amount >= amount, "need more deposit");
-            require(avaliable_amount <= ERC20(_usdc).balanceOf(address(this)), "we don't have that much zz");
+            require(amount <= ERC20(_usdc).balanceOf(address(this)), "we don't have that much zz");
             
             uint collateral = amount * current_usdc / current_eth * 2;
             borrow_usdc[msg.sender] += amount;
@@ -96,8 +101,17 @@ contract DreamAcademyLending {
             require(success);
         }
     }
-    function repay(address tokenAddress, uint256 amount) external{
-
+    // tokenAddress를 amount만큼 갚겠다.
+    function repay(address tokenAddress, uint256 amount) external payable {
+        require(borrow_eth[msg.sender] != 0 || borrow_usdc[msg.sender] != 0, "Nothing to repay");
+        if(tokenAddress == _usdc){
+            require(ERC20(tokenAddress).allowance(msg.sender, address(this)) >= amount, "not approved");
+            uint repaied = collateral_eth[msg.sender] * amount / borrow_usdc[msg.sender];
+            borrow_usdc[msg.sender] -= amount;
+            collateral_eth[msg.sender] -= repaied;
+            deposit_eth[msg.sender] += repaied;
+            ERC20(tokenAddress).transferFrom(msg.sender, address(this), amount);
+        }
     }
     function liquidate(address user, address tokenAddress, uint256 amount) external{
 
