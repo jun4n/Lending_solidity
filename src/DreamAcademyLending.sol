@@ -39,62 +39,59 @@ contract DreamAcademyLending {
         uint deposit_usdc;
         uint deposit_eth;
         uint borrow_usdc;
-        uint borrow_eth;
         uint collateral_eth;
         uint collateral_usdc;
+        uint fee;
         uint last_updated;
     }
     mapping(address => CustomerInfo) customer;
-
-    mapping(address => uint) deposit_usdc;
-    mapping(address => uint) deposit_eth;
-    mapping(address => uint) borrow_usdc;
-    mapping(address => uint) borrow_eth;
-    mapping(address => uint) collateral_usdc;
-    mapping(address => uint) collateral_eth;
+    // 고객 주소를 관리해서 유동성 공급량만큼 이자 부여
+    address[] customers_address;
     uint pool_deposit_usdc;
     uint interest_per_sec;
     uint digit;
+    
     // 0.1%는 1/1000이었다는거. 그런데 이렇게 계산하면 조금 오차가 있는거 같기도 함.
     // 한블록당 12초
     // 24시간 => 7200블록
-    // 1초마다 이자가 쌓이긴 하는데 결과적으로 24시간동안 쌓인 금액과 동일해져야 한다.
+    // 1초마다 이자가 쌓이긴 하는데 결과적으로 24시간동안 쌓인 금액과 동일해져야 한다. => 12초마다의 이자를 계산
     // 원금 + (원금 * 1/1000) => 하루 복리 받은 금액
-    // 원금 * (1 + x)**86400 => 매초 복리로 받은 금액
+    // 원금 * (1 + x)**7200 => 12초마다 복리로 7200번 받은 금액
     // 위 두개 금액이 같아야함.
-    // ( (원금) + (원금 * 1/1000) / 원금 ) ** (1/86400) - 1 = x
+    // ( (원금) + (원금 * 1/1000) / 원금 ) ** (1/7200) - 1 = x
+
     modifier setInterest {
-        //if(customer[msg.sender].last_updated + 86400 <= block.number)
-        //console.log("!!!!!!!!!!!~!@!@#!@# %d", (1000/digit) * ((digit+ interest_per_sec/digit) ** 86400));
-        //console.log("%d", interest_per_sec/digit);
-        if(customer[msg.sender].borrow_usdc > 0){
-            customer[msg.sender].borrow_usdc = (customer[msg.sender].borrow_usdc) * ((1 + ) ** (block.number - customer[msg.sender].last_updated));
-            console.log("2 %d", customer[msg.sender].borrow_usdc);
-            /*for(uint i = customer[msg.sender].last_updated; i < block.number; i++){
-                customer[msg.sender].borrow_usdc = customer[msg.sender].borrow_usdc + customer[msg.sender].borrow_usdc / 1000;
-            }*/
-        }
-        if(customer[msg.sender].deposit_eth > 0){
-            for(uint i = customer[msg.sender].last_updated; i < block.number; i++){
-                customer[msg.sender].deposit_eth = customer[msg.sender].deposit_eth + customer[msg.sender].deposit_eth / 1000;
+        uint current_usdc = oracle.getPrice(_usdc);
+        uint current_eth = oracle.getPrice(_eth);
+        uint interests;
+        for(uint i = 0; i< customers_address.length; i++){
+            address c = customers_address[i];
+            if(customer[c].borrow_usdc > 0){
+                uint tmp = customer[c].borrow_usdc * 10 ** 20;
+                for(uint j = customer[c].last_updated; j < block.number; j++){
+                    tmp = tmp + tmp / digit * interest_per_sec;
+                }
+                interests += (tmp / 10 ** 20) - customer[c].borrow_usdc;
+                customer[c].borrow_usdc = tmp / 10 ** 20;
+                customer[c].last_updated = block.number;
             }
         }
-        if(customer[msg.sender].deposit_usdc > 0){
-            for(uint i = customer[msg.sender].last_updated; i < block.number; i++){
-                customer[msg.sender].deposit_usdc = customer[msg.sender].deposit_usdc + customer[msg.sender].deposit_usdc / 1000;
+        for(uint i = 0; i < customers_address.length; i++){
+            address c = customers_address[i];
+            if(customer[c].deposit_usdc > 0){
+                customer[c].fee += ((interests * 10 ** 20) / pool_deposit_usdc * customer[c].deposit_usdc) / 10 ** 20;
             }
         }
-        customer[msg.sender].last_updated = block.number;
-        console.log("%d", customer[msg.sender].last_updated);
         _;
     }
 
     constructor (IPriceOracle _oracle, address usdc){
         oracle = _oracle;
         _usdc = usdc;
-        // 0.0000000115682909
-        interest_per_sec = 115682909;
-        digit = 10000000000000000;
+        // 1.3881950033933776e-07
+        // 0.000000138819500339337760
+        interest_per_sec = 138819500339337760;
+        digit = 1000000000000000000000000;
     }
 
     function initializeLendingProtocol(address usdc) public payable {
@@ -112,76 +109,72 @@ contract DreamAcademyLending {
             require(ERC20(tokenAddress).allowance(msg.sender, address(this)) >= amount, "insufficient usdc");
             customer[msg.sender].deposit_usdc += amount;
             ERC20(tokenAddress).transferFrom(msg.sender, address(this), amount);
-            //pool_deposit_usdc = ERC20(tokenAddress).balanceOf(address(this));
+            pool_deposit_usdc = ERC20(tokenAddress).balanceOf(address(this));
         }
+        customers_address.push(msg.sender);
     }
 
     // tokenAddress를 amount만큼 빌리고 싶다
+    // eth를 빌리는 경우는 없다.
     function borrow(address tokenAddress, uint256 amount) external{
         uint current_usdc = oracle.getPrice(_usdc);
         uint current_eth = oracle.getPrice(_eth);
         uint avaliable_amount;
-        if(tokenAddress == _usdc){
-            avaliable_amount =  (customer[msg.sender].deposit_eth * current_eth / current_usdc) /  2;
-            console.log("available: %d, amount: %d",avaliable_amount, amount);
-            require(avaliable_amount >= amount, "need more deposit");
-            require(amount <= ERC20(_usdc).balanceOf(address(this)), "we don't have that much zz");
-            
-            uint collateral = amount * current_usdc / current_eth * 2;
-            customer[msg.sender].borrow_usdc += amount;
-            customer[msg.sender].collateral_eth += collateral;
-            customer[msg.sender].deposit_eth -= collateral;
-            console.log("msg.sender deposit: %d", customer[msg.sender].deposit_eth);
-            ERC20(tokenAddress).transfer(msg.sender, amount);
-        }else{
-            avaliable_amount =  (customer[msg.sender].deposit_usdc * current_usdc / current_eth) /  2;
-            require(avaliable_amount >= amount, "need more deposit");
-            require(avaliable_amount <= address(this).balance, "we don't have that much zz");
-            
-            uint collateral = amount * current_eth / current_usdc * 2;
-            customer[msg.sender].borrow_eth += amount;
-            customer[msg.sender].collateral_usdc += collateral;
-            customer[msg.sender].deposit_usdc -= collateral;
-
-            (bool success, ) = msg.sender.call{value: amount}("");
-            require(success);
-        }
+        
+        avaliable_amount =  (customer[msg.sender].deposit_eth * current_eth / current_usdc) /  2;
+        
+        require(avaliable_amount >= amount, "need more deposit");
+        require(amount <= ERC20(_usdc).balanceOf(address(this)), "we don't have that much zz");
+        
+        uint collateral = amount * current_usdc / current_eth * 2;
+        customer[msg.sender].borrow_usdc += amount;
+        customer[msg.sender].collateral_eth += collateral;
+        customer[msg.sender].deposit_eth -= collateral;
+        
+        ERC20(tokenAddress).transfer(msg.sender, amount);
+        
         customer[msg.sender].last_updated = block.number;
     }
     // tokenAddress를 amount만큼 갚겠다.
-    // USDC를 담보로 ETH를 빌리는 상황은 없는건가?
+    
     function repay(address tokenAddress, uint256 amount) external payable setInterest{
-        require(customer[msg.sender].borrow_eth != 0 || customer[msg.sender].borrow_usdc != 0, "Nothing to repay");
-        if(tokenAddress == _usdc){
-            require(ERC20(tokenAddress).allowance(msg.sender, address(this)) >= amount, "not approved");
-            uint repaied = customer[msg.sender].collateral_eth * amount / customer[msg.sender].borrow_usdc;
-            console.log("repaied: %d", repaied);
-            customer[msg.sender].borrow_usdc -= amount;
-            customer[msg.sender].collateral_eth -= repaied;
-            customer[msg.sender].deposit_eth += repaied;
-            ERC20(tokenAddress).transferFrom(msg.sender, address(this), amount);
-        }
+        require(customer[msg.sender].borrow_usdc != 0, "Nothing to repay");
+
+        require(ERC20(tokenAddress).allowance(msg.sender, address(this)) >= amount, "not approved");
+        uint repaied = customer[msg.sender].collateral_eth * amount / customer[msg.sender].borrow_usdc;
+        console.log("repaied: %d", repaied);
+        customer[msg.sender].borrow_usdc -= amount;
+        customer[msg.sender].collateral_eth -= repaied;
+        customer[msg.sender].deposit_eth += repaied;
+        ERC20(tokenAddress).transferFrom(msg.sender, address(this), amount);
+        
     }
     function liquidate(address user, address tokenAddress, uint256 amount) external{
-
+        
     }
     // tokenAddress를 amount만큼 출금하겠다. 입금이 선행되야 하고, 출금 금액이 입금액보다 많아선 안됨.
     function withdraw(address tokenAddress, uint256 amount) external setInterest{
-        console.log("amount borrow_usdc: %d", customer[msg.sender].borrow_usdc);
+        
         if(tokenAddress == _eth){
             require(customer[msg.sender].deposit_eth >= amount, "you didn't deposit that much");
             require(address(this).balance >= amount, "we don't have that much bb");
             customer[msg.sender].deposit_eth -= amount;
             (bool success, ) = msg.sender.call{value: amount}("");
             require(success);
+        }else{
+            require(customer[msg.sender].deposit_usdc + customer[msg.sender].fee >= amount, "you don't have thatm uch");
+            require(ERC20(tokenAddress).balanceOf(address(this)) >= amount, "we don't have that much");
+            if(amount > customer[msg.sender].deposit_usdc){
+                customer[msg.sender].fee -= (amount - customer[msg.sender].deposit_usdc);
+                customer[msg.sender].deposit_usdc = 0;
+                ERC20(tokenAddress).transfer(msg.sender, amount);
+            }
         }
     }
     function getAccruedSupplyAmount(address token) public setInterest returns(uint){
         if(token == _usdc){
-            console.log("deposit_usdc: %d", customer[msg.sender].deposit_usdc);
-            return customer[msg.sender].deposit_usdc;
+            return customer[msg.sender].deposit_usdc + customer[msg.sender].fee;
         }else{
-            console.log("!!!!!!");
             return customer[msg.sender].deposit_eth;
         }
     }
