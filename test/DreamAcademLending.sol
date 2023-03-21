@@ -470,12 +470,14 @@ contract Testx is Test {
             (success,) = address(lending).call(
                 abi.encodeWithSelector(DreamAcademyLending.withdraw.selector, address(0x0), 1 ether)
             );
+
             assertFalse(success);
         }
         vm.stopPrank();
-
+        console.log("30000000 ether, 1e18: %d",30000000 ether,  1e18);
         vm.roll(block.number + (86400 * 1000 / 12));
         vm.prank(user3);
+        console.log("%d", lending.getAccruedSupplyAmount(address(usdc)));
         assertTrue(lending.getAccruedSupplyAmount(address(usdc)) / 1e18 == 30000792);
 
         vm.roll(block.number + (86400 * 500 / 12));
