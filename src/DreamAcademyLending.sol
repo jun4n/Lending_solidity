@@ -57,7 +57,7 @@ contract DreamAcademyLending {
     modifier setInterest {
         if(customer[msg.sender].borrow_usdc > 0){
             for(uint i = customer[msg.sender].last_updated; i < block.number; i++){
-                customer[msg.sender].borrow_usdc = customer[msg.sender].borrow_usdc + customer[msg.sender].borrow_usdc / 10;
+                customer[msg.sender].borrow_usdc = customer[msg.sender].borrow_usdc + customer[msg.sender].borrow_usdc / 1000;
             }
         }
         customer[msg.sender].last_updated = block.number;
