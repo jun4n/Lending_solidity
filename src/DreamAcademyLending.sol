@@ -51,7 +51,8 @@ contract DreamAcademyLending {
         uint borrow_usdc;
         uint collateral_eth;
         uint collateral_usdc;
-        uint prev_value_eth;
+        uint prev_eth;
+        uint prev_usdc;
         uint fee;
         uint last_updated;
         uint liquidate_count;
@@ -105,7 +106,14 @@ contract DreamAcademyLending {
         if (tokenAddress == _eth){
             //require(msg.value > 0, "must deposit more than 0 ether");
             require(msg.value == amount, "insufficient eth");
-            customer[msg.sender].deposit_eth += msg.value;
+            // 대출이 있을 경우 담보로 들어간다?
+            if(customer[msg.sender].borrow_usdc > 0){
+                uint current_eth = oracle.getPrice(_eth);
+                customer[msg.sender].collateral_eth += msg.value;
+                customer[msg.sender].prev_eth = (customer[msg.sender].prev_eth+ current_eth)/2;
+            }else{
+                customer[msg.sender].deposit_eth += msg.value;
+            }
         }else{
             require(ERC20(tokenAddress).allowance(msg.sender, address(this)) >= amount, "insufficient usdc");
             customer[msg.sender].deposit_usdc += amount;
@@ -131,7 +139,8 @@ contract DreamAcademyLending {
         customer[msg.sender].borrow_usdc += amount;
         customer[msg.sender].collateral_eth += collateral;
         customer[msg.sender].deposit_eth -= collateral;
-
+        customer[msg.sender].prev_eth = current_eth;
+        customer[msg.sender].prev_usdc = current_usdc;
         ERC20(tokenAddress).transfer(msg.sender, amount);
 
         customer[msg.sender].last_updated = block.number;
@@ -161,9 +170,13 @@ contract DreamAcademyLending {
         uint current_eth = oracle.getPrice(_eth);
         uint collateral = customer[user].collateral_eth;
         uint borrow = customer[user].borrow_usdc;
-        uint prev_eth = borrow * 2;
-
-        require((current_eth * 10 ** 2) / prev_eth > 25, "can't liquidate");
+        uint prev_eth = customer[user].prev_eth;
+        uint prev_usdc = customer[user].prev_usdc;
+        
+        // usdc의 가치가 eth의 가치보다 떨어져 있을 경우 liquidate불가능
+        require((current_usdc * 10 ** 2) / prev_usdc > (current_eth * 10 ** 2)/prev_eth, "usdc fail");
+        // 담보의 가치가 75%미만으로 떨어졌을경우, 담보의 가치는 담보의 수량을 포함함.
+        require((current_eth * 10 ** 2) * (collateral / 1e18) / (prev_eth) < 75, "can't liquidate");
         require(ERC20(tokenAddress).allowance(msg.sender, address(this)) >= amount, "not repaied");
 
         if(borrow < 100 ether){
