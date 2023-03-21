@@ -51,8 +51,10 @@ contract DreamAcademyLending {
         uint borrow_usdc;
         uint collateral_eth;
         uint collateral_usdc;
+        uint prev_value_eth;
         uint fee;
         uint last_updated;
+        uint liquidate_count;
     }
     mapping(address => CustomerInfo) customer;
     // 고객 주소를 관리해서 유동성 공급량만큼 이자 부여
@@ -60,10 +62,8 @@ contract DreamAcademyLending {
     uint pool_deposit_usdc;
     uint interest_per_sec;
     uint digit;
-
+    // 가스비가 너무 많이 나옴
     modifier setInterest {
-        uint current_usdc = oracle.getPrice(_usdc);
-        uint current_eth = oracle.getPrice(_eth);
         uint interests;
         for(uint i = 0; i< customers_address.length; i++){
             address c = customers_address[i];
@@ -131,16 +131,15 @@ contract DreamAcademyLending {
         customer[msg.sender].borrow_usdc += amount;
         customer[msg.sender].collateral_eth += collateral;
         customer[msg.sender].deposit_eth -= collateral;
-        
+
         ERC20(tokenAddress).transfer(msg.sender, amount);
-        
+
         customer[msg.sender].last_updated = block.number;
     }
     // tokenAddress를 amount만큼 갚겠다.
     
     function repay(address tokenAddress, uint256 amount) external payable setInterest{
         require(customer[msg.sender].borrow_usdc != 0, "Nothing to repay");
-
         require(ERC20(tokenAddress).allowance(msg.sender, address(this)) >= amount, "not approved");
         uint repaied = customer[msg.sender].collateral_eth * amount / customer[msg.sender].borrow_usdc;
         console.log("repaied: %d", repaied);
@@ -150,23 +149,71 @@ contract DreamAcademyLending {
         ERC20(tokenAddress).transferFrom(msg.sender, address(this), amount);
         
     }
-    // 담보를 청산하여 usdc 확보
+    // 담보를 청산하여 usdc 확보 => lending protocol 입장에서
+    // thershold가 75%라는건 담보의 가치가 25%하락시 청산이 가능한 포지션이라는것
+    // ** README **
+    // can liquidate the whole position when the borrowed amount is less than 100,
+    // otherwise only 25% can be liquidated at once.
     function liquidate(address user, address tokenAddress, uint256 amount) external{
-        if(tokenAddress == _eth){
-            require(customer[msg.sender].collateral_eth >= amount, "you can't liquidate that much");
+        require(customer[user].borrow_usdc > 0);
+
+        uint current_usdc = oracle.getPrice(_usdc);
+        uint current_eth = oracle.getPrice(_eth);
+        uint collateral = customer[user].collateral_eth;
+        uint borrow = customer[user].borrow_usdc;
+        uint prev_eth = borrow * 2;
+
+        require((current_eth * 10 ** 2) / prev_eth > 25, "can't liquidate");
+        require(ERC20(tokenAddress).allowance(msg.sender, address(this)) >= amount, "not repaied");
+
+        if(borrow < 100 ether){
+            require( amount == borrow);
+            customer[user].borrow_usdc = 0;
+            customer[user].collateral_eth = 0;
+            customer[user].liquidate_count = 0;
+            ERC20(tokenAddress).transferFrom(msg.sender, address(this), amount);
+            (bool success, ) = msg.sender.call{value: amount}("");
         }else{
-            require(customer[msg.sender].collateral_usdc >= amount, "you can't liquidate that much");
+            require(amount == borrow / (4 - customer[user].liquidate_count));
+            customer[user].borrow_usdc -= amount;
+            customer[user].collateral_eth -= collateral / (4 - customer[user].liquidate_count);
+            customer[user].liquidate_count += 1;
+            // 청산당하다가 다시 deposit, borrow하는 경우는? => 물타기 해서 liquidation threshold를 넘지 안는다면 liquidate_count는 어떻게 해야하나?
+            if(customer[user].borrow_usdc == 0){
+                customer[user].liquidate_count = 0;
+            }
+            ERC20(tokenAddress).transferFrom(msg.sender, address(this), amount);
         }
     }
+
     // tokenAddress를 amount만큼 출금하겠다. 입금이 선행되야 하고, 출금 금액이 입금액보다 많아선 안됨.
+    // 자체 청산 추가
     function withdraw(address tokenAddress, uint256 amount) external setInterest{
-        
         if(tokenAddress == _eth){
-            require(customer[msg.sender].deposit_eth >= amount, "you didn't deposit that much");
-            require(address(this).balance >= amount, "we don't have that much bb");
-            customer[msg.sender].deposit_eth -= amount;
-            (bool success, ) = msg.sender.call{value: amount}("");
-            require(success);
+            if(customer[msg.sender].deposit_eth >= amount){
+                customer[msg.sender].deposit_eth -= amount;
+                (bool success, ) = msg.sender.call{value: amount}("");
+                require(success);
+            }
+            // 자체 청산 => 자체 청산시 ETH가 LT이상으로 떨어졌다고 가정하고 청산
+            // borrow_value / (collateral_value - x) * 100 = 75
+            // x = collateral_value - (borrow_value * 100)/76
+            else{
+                require(customer[msg.sender].collateral_eth > 0);
+                uint current_usdc = oracle.getPrice(_usdc);
+                uint current_eth = oracle.getPrice(_eth);
+                uint x = (customer[msg.sender].collateral_eth * current_eth - (customer[msg.sender].borrow_usdc * current_usdc * 100) / 75 ) / 1e18 / 1e18;
+                uint payback = customer[msg.sender].collateral_eth * x / (current_eth/1e18);
+                console.log("Q %d %d %d", customer[msg.sender].collateral_eth, x, current_eth/1e18);
+                console.log("A %d %d %d", 1 ether, 1333, 4000);
+                console.log("????%d",x);
+                console.log("%d %d", payback, amount);
+                require(payback == amount);
+                console.log("!!!!!");
+                customer[msg.sender].collateral_eth = 0;
+                customer[msg.sender].borrow_usdc = 0;
+                msg.sender.call{value: amount}("");
+            }
         }else{
             require(customer[msg.sender].deposit_usdc + customer[msg.sender].fee >= amount, "you don't have thatm uch");
             require(ERC20(tokenAddress).balanceOf(address(this)) >= amount, "we don't have that much");
@@ -184,5 +231,4 @@ contract DreamAcademyLending {
             return customer[msg.sender].deposit_eth;
         }
     }
-
 }

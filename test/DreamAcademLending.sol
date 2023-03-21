@@ -394,9 +394,11 @@ contract Testx is Test {
 
             // 2000 / (4000 - 1333) * 100 = 74.xxxx
             // LT = 75%
+            // 자체 청산?
             (success,) = address(lending).call(
                 abi.encodeWithSelector(DreamAcademyLending.withdraw.selector, address(0x0), 1 ether * 1333 / 4000)
             );
+            console.logBool(success);
             assertTrue(success);
         }
         vm.stopPrank();
@@ -631,6 +633,7 @@ contract Testx is Test {
             (bool success,) = address(lending).call(
                 abi.encodeWithSelector(DreamAcademyLending.liquidate.selector, user2, address(usdc), 500 ether)
             );
+            console.logBool(success);
             assertTrue(success);
         }
         vm.stopPrank();
