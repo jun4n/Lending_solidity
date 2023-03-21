@@ -469,12 +469,12 @@ contract Testx is Test {
 
         vm.roll(block.number + (86400 * 1000 / 12));
         vm.prank(user3);
-        console.logBool(lending.getAccruedSupplyAmount(address(usdc)) / 1e18 == 30000792);
+        //console.logBool(lending.getAccruedSupplyAmount(address(usdc)) / 1e18 == 30000792);
         assertTrue(lending.getAccruedSupplyAmount(address(usdc)) / 1e18 == 30000792);
 
         vm.roll(block.number + (86400 * 500 / 12));
         vm.prank(user3);
-        console.logBool(lending.getAccruedSupplyAmount(address(usdc)) / 1e18 == 30001605);
+        //success = lending.getAccruedSupplyAmount(address(usdc)) / 1e18 == 30001605;
         assertTrue(lending.getAccruedSupplyAmount(address(usdc)) / 1e18 == 30001605);
 
         vm.prank(user3);
@@ -581,8 +581,8 @@ contract Testx is Test {
             (bool success,) = address(lending).call(
                 abi.encodeWithSelector(DreamAcademyLending.borrow.selector, address(usdc), 2000 ether)
             );
-            assertTrue(success);
 
+            assertTrue(success);
             assertTrue(usdc.balanceOf(user2) == 2000 ether);
 
             usdc.approve(address(lending), type(uint256).max);
@@ -596,6 +596,7 @@ contract Testx is Test {
             (bool success,) = address(lending).call(
                 abi.encodeWithSelector(DreamAcademyLending.liquidate.selector, user2, address(usdc), 800 ether)
             );
+            console.logBool(success);
             assertFalse(success);
         }
         vm.stopPrank();

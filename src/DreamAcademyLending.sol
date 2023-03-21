@@ -10,6 +10,16 @@ ETH를 담보로 사용해서 USDC를 빌리고 빌려줄 수 있는 서비스�
 실제 토큰을 사용하지 않고 컨트랙트 생성자의 인자로 받은 주소들을 토큰의 주소로 간주합니다.
 주요 기능 인터페이스는 아래를 참고해 만드시면 됩니다.
  */
+
+
+     // 0.1%는 1/1000이었다는거. 그런데 이렇게 계산하면 조금 오차가 있는거 같기도 함.
+    // 한블록당 12초
+    // 24시간 => 7200블록
+    // 1초마다 이자가 쌓이긴 하는데 결과적으로 24시간동안 쌓인 금액과 동일해져야 한다. => 12초마다의 이자를 계산
+    // 원금 + (원금 * 1/1000) => 하루 복리 받은 금액
+    // 원금 * (1 + x)**7200 => 12초마다 복리로 7200번 받은 금액
+    // 위 두개 금액이 같아야함.
+    // ( (원금) + (원금 * 1/1000) / 원금 ) ** (1/7200) - 1 = x
  import {ERC20} from "openzeppelin-contracts/contracts/token/ERC20/ERC20.sol";
  import "forge-std/console.sol";
  contract IPriceOracle {
@@ -50,15 +60,6 @@ contract DreamAcademyLending {
     uint pool_deposit_usdc;
     uint interest_per_sec;
     uint digit;
-    
-    // 0.1%는 1/1000이었다는거. 그런데 이렇게 계산하면 조금 오차가 있는거 같기도 함.
-    // 한블록당 12초
-    // 24시간 => 7200블록
-    // 1초마다 이자가 쌓이긴 하는데 결과적으로 24시간동안 쌓인 금액과 동일해져야 한다. => 12초마다의 이자를 계산
-    // 원금 + (원금 * 1/1000) => 하루 복리 받은 금액
-    // 원금 * (1 + x)**7200 => 12초마다 복리로 7200번 받은 금액
-    // 위 두개 금액이 같아야함.
-    // ( (원금) + (원금 * 1/1000) / 원금 ) ** (1/7200) - 1 = x
 
     modifier setInterest {
         uint current_usdc = oracle.getPrice(_usdc);
@@ -149,8 +150,13 @@ contract DreamAcademyLending {
         ERC20(tokenAddress).transferFrom(msg.sender, address(this), amount);
         
     }
+    // 담보를 청산하여 usdc 확보
     function liquidate(address user, address tokenAddress, uint256 amount) external{
-        
+        if(tokenAddress == _eth){
+            require(customer[msg.sender].collateral_eth >= amount, "you can't liquidate that much");
+        }else{
+            require(customer[msg.sender].collateral_usdc >= amount, "you can't liquidate that much");
+        }
     }
     // tokenAddress를 amount만큼 출금하겠다. 입금이 선행되야 하고, 출금 금액이 입금액보다 많아선 안됨.
     function withdraw(address tokenAddress, uint256 amount) external setInterest{
