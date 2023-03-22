@@ -279,16 +279,19 @@ contract Testx is Test {
             (success,) = address(lending).call(
                 abi.encodeWithSelector(DreamAcademyLending.repay.selector, address(usdc), 1000 ether)
             );
+            console.logBool(success);
             assertTrue(success);
 
             (success,) = address(lending).call(
                 abi.encodeWithSelector(DreamAcademyLending.borrow.selector, address(usdc), 1000 ether)
             );
+            console.logBool(success);
             assertFalse(success);
 
             (success,) = address(lending).call(
                 abi.encodeWithSelector(DreamAcademyLending.borrow.selector, address(usdc), 999 ether)
             );
+            console.logBool(success);
             assertTrue(success);
         }
         vm.stopPrank();
@@ -521,7 +524,7 @@ contract Testx is Test {
             assertFalse(success);
         }
         vm.stopPrank();
-
+        
         vm.roll(block.number + (86400 * 1000 / 12));
         vm.prank(user3);
         assertTrue(lending.getAccruedSupplyAmount(address(usdc)) / 1e18 == 30000792);

@@ -20,11 +20,6 @@ ETH를 담보로 사용해서 USDC를 빌리고 빌려줄 수 있는 서비스�
     // 원금 * (1 + x)**7200 => 12초마다 복리로 7200번 받은 금액
     // 위 두개 금액이 같아야함.
     // ( (원금) + (원금 * 1/1000) / 원금 ) ** (1/7200) - 1 = x
-
-
-// 수정해야할점 => 가스비 해결
-// 일단 이자를 받을 일도 없는 고객들까지 반복하고 있다는 점
-// 하루가 지났어도 블록당 이자로 계산하고 있다는 점?
  import {ERC20} from "openzeppelin-contracts/contracts/token/ERC20/ERC20.sol";
  import "forge-std/console.sol";
  contract IPriceOracle {
@@ -65,43 +60,30 @@ contract DreamAcademyLending {
     mapping(address => CustomerInfo) customer;
     // 고객 주소를 관리해서 유동성 공급량만큼 이자 부여
     address[] customers_address;
-    address[] borrow_customer;
-    address[] deposit_customer;
     uint pool_deposit_usdc;
     uint interest_per_sec;
     uint digit;
-
+    // 가스비가 너무 많이 나옴
     modifier setInterest {
         uint interests;
-        uint day;
-        uint blocks;
         for(uint i = 0; i< customers_address.length; i++){
             address c = customers_address[i];
             if(customer[c].borrow_usdc > 0){
-                day = (block.number - customer[c].last_updated) / 7200;
-                blocks = (block.number - customer[c].last_updated) % 7200;
-
-                uint tmp = customer[c].borrow_usdc * 10 ** 12;
-                for(uint j = 0; j < day; j++){
-                    tmp = tmp + tmp / 1000;
-                }
-                console.log("!");
-                for(uint j = 0; j < blocks; j++){
+                uint tmp = customer[c].borrow_usdc * 10 ** 20;
+                for(uint j = customer[c].last_updated; j < block.number; j++){
                     tmp = tmp + tmp / digit * interest_per_sec;
                 }
-                console.log("?");
-                interests += (tmp / 10 ** 12) - customer[c].borrow_usdc;
-                customer[c].borrow_usdc = tmp / 10 ** 12;
+                interests += (tmp / 10 ** 20) - customer[c].borrow_usdc;
+                customer[c].borrow_usdc = tmp / 10 ** 20;
                 customer[c].last_updated = block.number;
             }
         }
         for(uint i = 0; i < customers_address.length; i++){
             address c = customers_address[i];
             if(customer[c].deposit_usdc > 0){
-                customer[c].fee += ((interests * 10 ** 12) / pool_deposit_usdc * customer[c].deposit_usdc) / 10 ** 12;
+                customer[c].fee += ((interests * 10 ** 20) / pool_deposit_usdc * customer[c].deposit_usdc) / 10 ** 20;
             }
         }
-        console.log("#");
         _;
     }
 
@@ -115,7 +97,7 @@ contract DreamAcademyLending {
     }
 
     function initializeLendingProtocol(address usdc) public payable {
-        require(ERC20(usdc).transferFrom(msg.sender, address(this), msg.value));
+        ERC20(usdc).transferFrom(msg.sender, address(this), msg.value);
         customer[msg.sender].deposit_eth += msg.value;
         customer[msg.sender].deposit_usdc += msg.value;
     }
@@ -135,7 +117,7 @@ contract DreamAcademyLending {
         }else{
             require(ERC20(tokenAddress).allowance(msg.sender, address(this)) >= amount, "insufficient usdc");
             customer[msg.sender].deposit_usdc += amount;
-            require(ERC20(tokenAddress).transferFrom(msg.sender, address(this), amount));
+            ERC20(tokenAddress).transferFrom(msg.sender, address(this), amount);
             pool_deposit_usdc = ERC20(tokenAddress).balanceOf(address(this));
         }
         customers_address.push(msg.sender);
@@ -159,23 +141,23 @@ contract DreamAcademyLending {
         customer[msg.sender].deposit_eth -= collateral;
         customer[msg.sender].prev_eth = current_eth;
         customer[msg.sender].prev_usdc = current_usdc;
+        ERC20(tokenAddress).transfer(msg.sender, amount);
+
         customer[msg.sender].last_updated = block.number;
-        require(ERC20(tokenAddress).transfer(msg.sender, amount));
     }
     // tokenAddress를 amount만큼 갚겠다.
     
     function repay(address tokenAddress, uint256 amount) external payable setInterest{
         require(customer[msg.sender].borrow_usdc != 0, "Nothing to repay");
         require(ERC20(tokenAddress).allowance(msg.sender, address(this)) >= amount, "not approved");
-        console.log("@");
         uint repaied = customer[msg.sender].collateral_eth * amount / customer[msg.sender].borrow_usdc;
         console.log("repaied: %d", repaied);
         customer[msg.sender].borrow_usdc -= amount;
         customer[msg.sender].collateral_eth -= repaied;
         customer[msg.sender].deposit_eth += repaied;
-        require(ERC20(tokenAddress).transferFrom(msg.sender, address(this), amount));
+        ERC20(tokenAddress).transferFrom(msg.sender, address(this), amount);
+        
     }
-
     // 담보를 청산하여 usdc 확보 => lending protocol 입장에서
     // thershold가 75%라는건 담보의 가치가 25%하락시 청산이 가능한 포지션이라는것
     // ** README **
@@ -202,7 +184,7 @@ contract DreamAcademyLending {
             customer[user].borrow_usdc = 0;
             customer[user].collateral_eth = 0;
             customer[user].liquidate_count = 0;
-            require(ERC20(tokenAddress).transferFrom(msg.sender, address(this), amount));
+            ERC20(tokenAddress).transferFrom(msg.sender, address(this), amount);
             (bool success, ) = msg.sender.call{value: amount}("");
         }else{
             require(amount == borrow / (4 - customer[user].liquidate_count));
@@ -213,7 +195,7 @@ contract DreamAcademyLending {
             if(customer[user].borrow_usdc == 0){
                 customer[user].liquidate_count = 0;
             }
-            require(ERC20(tokenAddress).transferFrom(msg.sender, address(this), amount));
+            ERC20(tokenAddress).transferFrom(msg.sender, address(this), amount);
         }
     }
 
@@ -243,8 +225,7 @@ contract DreamAcademyLending {
                 console.log("!!!!!");
                 customer[msg.sender].collateral_eth = 0;
                 customer[msg.sender].borrow_usdc = 0;
-                (bool success, ) = msg.sender.call{value: amount}("");
-                require(success);
+                msg.sender.call{value: amount}("");
             }
         }else{
             require(customer[msg.sender].deposit_usdc + customer[msg.sender].fee >= amount, "you don't have thatm uch");
@@ -252,7 +233,7 @@ contract DreamAcademyLending {
             if(amount > customer[msg.sender].deposit_usdc){
                 customer[msg.sender].fee -= (amount - customer[msg.sender].deposit_usdc);
                 customer[msg.sender].deposit_usdc = 0;
-                require(ERC20(tokenAddress).transfer(msg.sender, amount));
+                ERC20(tokenAddress).transfer(msg.sender, amount);
             }
         }
     }
