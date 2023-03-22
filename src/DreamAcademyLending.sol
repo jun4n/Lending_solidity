@@ -51,23 +51,30 @@ contract DreamAcademyLending {
     address _eth;
 
     struct CustomerInfo{
+        // deposit한 토큰의 수
         uint deposit_usdc;
         uint deposit_eth;
+        // 대출한 USDC의 수
         uint borrow_usdc;
+        // 담보로 맡긴 ETH의 수
         uint collateral_eth;
-        uint collateral_usdc;
+        // 대출 당시의 ETH, USDC의 가치
         uint prev_eth;
         uint prev_usdc;
+        // 유동성 공급량에 해당하는 이자
         uint fee;
+        // 마지막 이자 계산 시간
         uint last_updated;
+        // 몇번 청산됐는지 카운트
         uint liquidate_count;
+        // 고객 주소록에 들어가 있는지 확인
+        bool pushed;
     }
     mapping(address => CustomerInfo) customer;
     // 고객 주소를 관리해서 유동성 공급량만큼 이자 부여
     address[] customers_address;
     address[] borrow_customer;
     address[] deposit_customer;
-    uint pool_deposit_usdc;
     uint interest_per_sec;
     uint digit;
 
@@ -75,6 +82,7 @@ contract DreamAcademyLending {
         uint interests;
         uint day;
         uint blocks;
+        uint pool_deposit_usdc = ERC20(_usdc).balanceOf(address(this));
         for(uint i = 0; i< customers_address.length; i++){
             address c = customers_address[i];
             if(customer[c].borrow_usdc > 0){
@@ -85,11 +93,9 @@ contract DreamAcademyLending {
                 for(uint j = 0; j < day; j++){
                     tmp = tmp + tmp / 1000;
                 }
-                console.log("!");
                 for(uint j = 0; j < blocks; j++){
                     tmp = tmp + tmp / digit * interest_per_sec;
                 }
-                console.log("?");
                 interests += (tmp / 10 ** 12) - customer[c].borrow_usdc;
                 customer[c].borrow_usdc = tmp / 10 ** 12;
                 customer[c].last_updated = block.number;
@@ -101,7 +107,6 @@ contract DreamAcademyLending {
                 customer[c].fee += ((interests * 10 ** 12) / pool_deposit_usdc * customer[c].deposit_usdc) / 10 ** 12;
             }
         }
-        console.log("#");
         _;
     }
 
@@ -122,23 +127,30 @@ contract DreamAcademyLending {
 
     function deposit(address tokenAddress, uint256 amount) external payable{
         if (tokenAddress == _eth){
-            //require(msg.value > 0, "must deposit more than 0 ether");
-            require(msg.value == amount, "insufficient eth");
-            // 대출이 있을 경우 담보로 들어간다?
+            require(msg.value == amount, "Insufficient ETH");
+            // 대출이 있을 경우 담보로 들어간다? => 물타기인듯?
+            // 1USDC 미만의 토큰의 가치는 생각하지 않는 방식
             if(customer[msg.sender].borrow_usdc > 0){
                 uint current_eth = oracle.getPrice(_eth);
+                customer[msg.sender].prev_eth = 
+                (
+                    ( customer[msg.sender].prev_eth * customer[msg.sender].collateral_eth + current_eth * msg.value )
+                    / ( msg.value + customer[msg.sender].collateral_eth )
+                );
                 customer[msg.sender].collateral_eth += msg.value;
-                customer[msg.sender].prev_eth = (customer[msg.sender].prev_eth+ current_eth)/2;
             }else{
                 customer[msg.sender].deposit_eth += msg.value;
             }
         }else{
-            require(ERC20(tokenAddress).allowance(msg.sender, address(this)) >= amount, "insufficient usdc");
+            require(ERC20(tokenAddress).allowance(msg.sender, address(this)) >= amount, "Insufficient USDC");
             customer[msg.sender].deposit_usdc += amount;
             require(ERC20(tokenAddress).transferFrom(msg.sender, address(this), amount));
-            pool_deposit_usdc = ERC20(tokenAddress).balanceOf(address(this));
         }
-        customers_address.push(msg.sender);
+
+        // customer_address를 돌면서 이자를 받기 때문에 중복적으로 들어가는건 곤란함.
+        if(customer[msg.sender].pushed == false){
+            customers_address.push(msg.sender);
+        }
     }
 
     // tokenAddress를 amount만큼 빌리고 싶다
@@ -148,10 +160,10 @@ contract DreamAcademyLending {
         uint current_eth = oracle.getPrice(_eth);
         uint avaliable_amount;
         
-        avaliable_amount =  (customer[msg.sender].deposit_eth * current_eth / current_usdc) /  2;
+        avaliable_amount =  (((customer[msg.sender].deposit_eth * 10 ** 12) * current_eth / current_usdc) / 10 ** 12) /  2;
         
-        require(avaliable_amount >= amount, "need more deposit");
-        require(amount <= ERC20(_usdc).balanceOf(address(this)), "we don't have that much zz");
+        require(avaliable_amount >= amount, "amount exceeds availiable amount");
+        require(amount <= ERC20(_usdc).balanceOf(address(this)), "amount exceeds vault");
         
         uint collateral = amount * current_usdc / current_eth * 2;
         customer[msg.sender].borrow_usdc += amount;
@@ -162,14 +174,12 @@ contract DreamAcademyLending {
         customer[msg.sender].last_updated = block.number;
         require(ERC20(tokenAddress).transfer(msg.sender, amount));
     }
+
     // tokenAddress를 amount만큼 갚겠다.
-    
     function repay(address tokenAddress, uint256 amount) external payable setInterest{
         require(customer[msg.sender].borrow_usdc != 0, "Nothing to repay");
-        require(ERC20(tokenAddress).allowance(msg.sender, address(this)) >= amount, "not approved");
-        console.log("@");
+        require(ERC20(tokenAddress).allowance(msg.sender, address(this)) >= amount, "Not Approved");
         uint repaied = customer[msg.sender].collateral_eth * amount / customer[msg.sender].borrow_usdc;
-        console.log("repaied: %d", repaied);
         customer[msg.sender].borrow_usdc -= amount;
         customer[msg.sender].collateral_eth -= repaied;
         customer[msg.sender].deposit_eth += repaied;
@@ -187,25 +197,28 @@ contract DreamAcademyLending {
         uint current_usdc = oracle.getPrice(_usdc);
         uint current_eth = oracle.getPrice(_eth);
         uint collateral = customer[user].collateral_eth;
-        uint borrow = customer[user].borrow_usdc;
+        uint borrowed = customer[user].borrow_usdc;
         uint prev_eth = customer[user].prev_eth;
         uint prev_usdc = customer[user].prev_usdc;
         
         // usdc의 가치가 eth의 가치보다 떨어져 있을 경우 liquidate불가능
-        require((current_usdc * 10 ** 2) / prev_usdc > (current_eth * 10 ** 2)/prev_eth, "usdc fail");
-        // 담보의 가치가 75%미만으로 떨어졌을경우, 담보의 가치는 담보의 수량을 포함함.
-        require((current_eth * 10 ** 2) * (collateral / 1e18) / (prev_eth) < 75, "can't liquidate");
-        require(ERC20(tokenAddress).allowance(msg.sender, address(this)) >= amount, "not repaied");
+        require((current_usdc * 10 ** 2) / prev_usdc > (current_eth * 10 ** 2)/prev_eth, "[Can't Liquidate]] Collateral Value still higher than Liquidation Threshold");
+        // 담보의 가치가 75%미만으로 떨어졌을경우
+        // 담보의 가치는 담보의 수량을 포함함.
+        require((current_eth * 10 ** 2) * (collateral / 1e18) / (prev_eth) < 75, "[Can't Liquidate]] Collateral Value still higher than Liquidation Threshold");
+        require(ERC20(tokenAddress).allowance(msg.sender, address(this)) >= amount, "Not Approved");
 
-        if(borrow < 100 ether){
-            require( amount == borrow);
+        // 100 ether 미만의 담보는 한번에 100%로 청산
+        if(borrowed < 100 ether){
+            require(amount == borrowed);
             customer[user].borrow_usdc = 0;
             customer[user].collateral_eth = 0;
             customer[user].liquidate_count = 0;
             require(ERC20(tokenAddress).transferFrom(msg.sender, address(this), amount));
             (bool success, ) = msg.sender.call{value: amount}("");
+            require(success);
         }else{
-            require(amount == borrow / (4 - customer[user].liquidate_count));
+            require(amount == borrowed / (4 - customer[user].liquidate_count));
             customer[user].borrow_usdc -= amount;
             customer[user].collateral_eth -= collateral / (4 - customer[user].liquidate_count);
             customer[user].liquidate_count += 1;
