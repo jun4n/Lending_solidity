@@ -85,6 +85,7 @@ contract DreamAcademyLending {
         uint pool_deposit_usdc = ERC20(_usdc).balanceOf(address(this));
         for(uint i = 0; i< customers_address.length; i++){
             address c = customers_address[i];
+            
             if(customer[c].borrow_usdc > 0){
                 day = (block.number - customer[c].last_updated) / 7200;
                 blocks = (block.number - customer[c].last_updated) % 7200;
@@ -125,7 +126,7 @@ contract DreamAcademyLending {
         customer[msg.sender].deposit_usdc += msg.value;
     }
 
-    function deposit(address tokenAddress, uint256 amount) external payable{
+    function deposit(address tokenAddress, uint256 amount) external payable setInterest {
         if (tokenAddress == _eth){
             require(msg.value == amount, "Insufficient ETH");
             // 대출이 있을 경우 담보로 들어간다? => 물타기인듯?
@@ -156,11 +157,12 @@ contract DreamAcademyLending {
 
     // tokenAddress를 amount만큼 빌리고 싶다
     // eth를 빌리는 경우는 없다.
-    function borrow(address tokenAddress, uint256 amount) external{
+    function borrow(address tokenAddress, uint256 amount) external setInterest{
         uint current_usdc = oracle.getPrice(_usdc);
         uint current_eth = oracle.getPrice(_eth);
         uint avaliable_amount;
         
+        // may be overflow => overflow 시키려면 이더리움 개똥값되서 겁나 많이 넣어야할듯???
         avaliable_amount =  (((customer[msg.sender].deposit_eth * 10 ** 12) * current_eth / current_usdc) / 10 ** 12) /  2;
         
         require(avaliable_amount >= amount, "amount exceeds availiable amount");
@@ -173,10 +175,12 @@ contract DreamAcademyLending {
         customer[msg.sender].prev_eth = current_eth;
         customer[msg.sender].prev_usdc = current_usdc;
         customer[msg.sender].last_updated = block.number;
+        customer[msg.sender].liquidate_count = 0;
         require(ERC20(tokenAddress).transfer(msg.sender, amount));
     }
 
     // tokenAddress를 amount만큼 갚겠다.
+    // 가치는 생각하지 않아도 됨. 왜냐? 어차피 갚는사람이 amount만큼의 USDC를 가지고 온거니까
     function repay(address tokenAddress, uint256 amount) external payable setInterest{
         require(customer[msg.sender].borrow_usdc != 0, "Nothing to repay");
         require(ERC20(tokenAddress).allowance(msg.sender, address(this)) >= amount, "Not Approved");
@@ -192,7 +196,7 @@ contract DreamAcademyLending {
     // ** README **
     // can liquidate the whole position when the borrowed amount is less than 100,
     // otherwise only 25% can be liquidated at once.
-    function liquidate(address user, address tokenAddress, uint256 amount) external{
+    function liquidate(address user, address tokenAddress, uint256 amount) external setInterest{
         require(customer[user].borrow_usdc > 0);
 
         uint current_usdc = oracle.getPrice(_usdc);
@@ -202,10 +206,12 @@ contract DreamAcademyLending {
         uint prev_eth = customer[user].prev_eth;
         uint prev_usdc = customer[user].prev_usdc;
         
-        // usdc의 가치가 eth의 가치보다 떨어져 있을 경우 liquidate불가능
+        // usdc의 가치가 eth의 가치보다 떨어져 있을 경우 liquidate불가능. 왜냐면 USDC대비 ETH의 가치가 떨어지지만 안으면 되기 때문
+        // 기존 가치/현재가치 해서 기존의 가치에서 현재 가치가 얼마나 떨어졌는지를 비교한다.
         require((current_usdc * 10 ** 2) / prev_usdc > (current_eth * 10 ** 2)/prev_eth, "[Can't Liquidate]] Collateral Value still higher than Liquidation Threshold");
         // 담보의 가치가 75%미만으로 떨어졌을경우
         // 담보의 가치는 담보의 수량을 포함함.
+        // 기존 가치  * 담보의 수/ 현재가치 
         require((current_eth * 10 ** 2) * (collateral / 1e18) / (prev_eth) < 75, "[Can't Liquidate]] Collateral Value still higher than Liquidation Threshold");
         require(ERC20(tokenAddress).allowance(msg.sender, address(this)) >= amount, "Not Approved");
 
@@ -223,7 +229,7 @@ contract DreamAcademyLending {
             customer[user].borrow_usdc -= amount;
             customer[user].collateral_eth -= collateral / (4 - customer[user].liquidate_count);
             customer[user].liquidate_count += 1;
-            // 청산당하다가 다시 deposit, borrow하는 경우는? => 물타기 해서 liquidation threshold를 넘지 안는다면 liquidate_count는 어떻게 해야하나?
+            // 청산당하다가 다시 deposit, borrow하는 경우는? => 물타기 해서 liquidation threshold를 넘지 안는다면 liquidate_count는 어떻게 해야하나? => 담보의 가치가 조정됐으므로 liquidation_count도 0
             if(customer[user].borrow_usdc == 0){
                 customer[user].liquidate_count = 0;
             }
@@ -249,23 +255,22 @@ contract DreamAcademyLending {
                 uint current_eth = oracle.getPrice(_eth);
                 uint x = (customer[msg.sender].collateral_eth * current_eth - (customer[msg.sender].borrow_usdc * current_usdc * 100) / 75 ) / 1e18 / 1e18;
                 uint payback = customer[msg.sender].collateral_eth * x / (current_eth/1e18);
-                console.log("Q %d %d %d", customer[msg.sender].collateral_eth, x, current_eth/1e18);
-                console.log("A %d %d %d", 1 ether, 1333, 4000);
-                console.log("????%d",x);
-                console.log("%d %d", payback, amount);
                 require(payback == amount);
-                console.log("!!!!!");
                 customer[msg.sender].collateral_eth = 0;
                 customer[msg.sender].borrow_usdc = 0;
                 (bool success, ) = msg.sender.call{value: amount}("");
                 require(success);
             }
         }else{
-            require(customer[msg.sender].deposit_usdc + customer[msg.sender].fee >= amount, "you don't have thatm uch");
-            require(ERC20(tokenAddress).balanceOf(address(this)) >= amount, "we don't have that much");
+            require(customer[msg.sender].deposit_usdc + customer[msg.sender].fee >= amount, "Insufficient Balance");
+            require(ERC20(tokenAddress).balanceOf(address(this)) >= amount, "Insufficient Vault");
+            // 출금하려고 하는 금액이 deposit보다 클경우 이자 받은곳에서 충당.
             if(amount > customer[msg.sender].deposit_usdc){
                 customer[msg.sender].fee -= (amount - customer[msg.sender].deposit_usdc);
                 customer[msg.sender].deposit_usdc = 0;
+                require(ERC20(tokenAddress).transfer(msg.sender, amount));
+            } else{
+                customer[msg.sender].deposit_usdc -= amount;
                 require(ERC20(tokenAddress).transfer(msg.sender, amount));
             }
         }
