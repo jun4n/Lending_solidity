@@ -129,7 +129,7 @@ contract DreamAcademyLending {
         if (tokenAddress == _eth){
             require(msg.value == amount, "Insufficient ETH");
             // 대출이 있을 경우 담보로 들어간다? => 물타기인듯?
-            // 1USDC 미만의 토큰의 가치는 생각하지 않는 방식
+            // 담보금에 변경이 있을경우 청산 카운트도 초기화
             if(customer[msg.sender].borrow_usdc > 0){
                 uint current_eth = oracle.getPrice(_eth);
                 customer[msg.sender].prev_eth = 
@@ -138,6 +138,7 @@ contract DreamAcademyLending {
                     / ( msg.value + customer[msg.sender].collateral_eth )
                 );
                 customer[msg.sender].collateral_eth += msg.value;
+                customer[msg.sender].liquidate_count = 0;
             }else{
                 customer[msg.sender].deposit_eth += msg.value;
             }
